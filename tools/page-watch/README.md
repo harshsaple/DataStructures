@@ -1,17 +1,5 @@
 # page-watch
 
-Small scheduled job that reads a page, counts items per section, and sends a push notification through [ntfy](https://ntfy.sh) when something new shows up. It alerts only on items seen in the last `FRESH_MINUTES` (default 15) that it has not alerted on before.
+Small scheduled job that reads a feed of sightings embedded in a page and sends a push notification through [ntfy](https://ntfy.sh) for matching records seen in the last few minutes. Each record is alerted on once.
 
-Runs from `.github/workflows/page-watch.yml` every ~5 minutes. Everything specific is configured through repository secrets — either one `CONFIG` secret holding a JSON object with the keys below, or the keys as separate secrets:
-
-| Secret | Purpose |
-| --- | --- |
-| `NTFY_TOPIC` | ntfy topic to push to |
-| `TARGET_URL` | page to read |
-| `CLICK_URL` | link opened when tapping the notification |
-| `SECTIONS` | comma-separated section names to look for |
-| `LABELS` | two comma-separated labels (type A, type B) as written on the page |
-| `NAMES` | two comma-separated names to show in alerts |
-| `ANCHOR` | optional text marking where the relevant part of the page starts |
-
-Type B results are sent as urgent; type A only as normal priority.
+Runs from `.github/workflows/page-watch.yml` every ~5 minutes. Configuration lives in a `CONFIG` repository secret (JSON); the keys are documented at the top of `check.py`.

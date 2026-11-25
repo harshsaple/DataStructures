@@ -1,153 +1,117 @@
-"""Watch a page and push an ntfy alert when new items are seen."""
-from datetime import datetime, timedelta, timezone
-import html
+"""Read a feed of sightings and push an ntfy alert for fresh, matching ones.
+
+All specifics come from the CONFIG secret (JSON) or separate env variables:
+  NTFY_TOPIC     ntfy topic to push to
+  TARGET_URL     page whose embedded records are read
+  MATCH          value of the record's class field to keep
+  NAMES          display names: "<name for primary kind>,<name for other kinds>"
+  PRIMARY_KIND   record kind shown with the first name (default "ofc")
+  CLICK_URL      link opened when the notification is tapped
+  FRESH_MINUTES  only alert on records seen within this many minutes (default 15)
+"""
+import json
 import os
 import re
 import sys
 import urllib.request
-import json
+from datetime import datetime, timedelta, timezone
 
-# All settings can come from one CONFIG secret (JSON) or from separate variables.
 _cfg = json.loads(os.environ.get("CONFIG") or "{}")
 for _k, _v in _cfg.items():
     if not os.environ.get(_k):
-        os.environ[_k] = _v
+        os.environ[_k] = str(_v)
 
 URL = os.environ["TARGET_URL"]
-CITIES = os.environ["SECTIONS"].split(",")
-A_LABEL, B_LABEL = os.environ["LABELS"].split(",")  # page labels for type A and type B
-A_NAME, B_NAME = os.environ.get("NAMES", "A,B").split(",")  # names shown in alerts
 TOPIC = os.environ["NTFY_TOPIC"]
+MATCH = os.environ["MATCH"].lower()
+A_NAME, B_NAME = os.environ.get("NAMES", "A,B").split(",")
+PRIMARY = os.environ.get("PRIMARY_KIND", "ofc")
+FRESH_MIN = int(os.environ.get("FRESH_MINUTES", "15"))
 STATE_FILE = "last_alert.txt"
+IST = timezone(timedelta(hours=5, minutes=30))
+
+RECORD = re.compile(
+    r'id:"([^"]+)",city:"([^"]+)",kind:"([^"]+)",visaClass:"([^"]+)",'
+    r'earliestDate:"([\d-]+)",seenAt:(\d+),count:(\d+)')
 
 
-def fetch_text():
-    req = urllib.request.Request(URL, headers={"User-Agent": "Mozilla/5.0"})
-    raw = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
-    raw = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", raw)
-    text = html.unescape(re.sub(r"<[^>]+>", " ", raw))
-    return re.sub(r"\s+", " ", text)
+def fetch():
+    req = urllib.request.Request(URL, headers={
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/130.0 Safari/537.36",
+        "Accept": "text/html"})
+    return urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
 
 
-def parse(text):
-    """Return {section: {"A"|"B": {"count", "earliest", "seen"}}}."""
-    anchor = os.environ.get("ANCHOR", "")
-    if anchor and anchor in text:
-        text = text[text.index(anchor):]
-    results = {}
-    for i, city in enumerate(CITIES):
-        start = text.find(city)
-        if start < 0:
-            continue
-        nxt = [text.find(c, start + len(city)) for c in CITIES[i + 1:]]
-        nxt = [n for n in nxt if n > 0]
-        block = text[start: min(nxt) if nxt else start + 1500]
-        info = {}
-        labels = ((A_LABEL, "A"), (B_LABEL, "B"))
-        for j, (label, key) in enumerate(labels):
-            pos = re.search(re.escape(label), block, re.I)
-            if not pos:
-                continue
-            part = block[pos.start():]
-            if j == 0:  # stop the A part where the B part begins
-                b = re.search(re.escape(labels[1][0]), part, re.I)
-                part = part[: b.start()] if b else part
-            m = re.search(r"(\d+)\s+openings?", part, re.I)
-            e = re.search(r"Earliest from ([A-Z][a-z]+ \d{4})", part)
-            seen = re.search(r"last seen (\d{1,2} [A-Z][a-z]{2}, \d{1,2}:\d{2} [ap]m)", part, re.I)
-            if m:
-                info[key] = {"count": int(m.group(1)),
-                             "earliest": e.group(1) if e else "?",
-                             "seen": seen.group(1) if seen else ""}
-        results[city] = info
-    return results
+def parse(html):
+    out = []
+    for rid, city, kind, cls, earliest, seen_ms, count in RECORD.findall(html):
+        out.append({"id": rid, "city": city, "kind": kind, "cls": cls.lower(),
+                    "earliest": earliest, "count": int(count),
+                    "seen": datetime.fromtimestamp(int(seen_ms) / 1000, IST)})
+    return out
 
 
 def notify(title, body, priority, tags):
     req = urllib.request.Request(
         f"https://ntfy.sh/{TOPIC}", data=body.encode("utf-8"),
-        headers={"Title": title, "Priority": priority, "Tags": tags,
+        headers={"Title": title.encode("utf-8").decode("latin-1", "replace"),
+                 "Priority": priority, "Tags": tags,
                  "Click": os.environ.get("CLICK_URL", "")})
     urllib.request.urlopen(req, timeout=30)
 
 
-IST = timezone(timedelta(hours=5, minutes=30))
-FRESH_MIN = int(os.environ.get("FRESH_MINUTES", "15"))
+def nice_city(c):
+    return {"delhi": "New Delhi", "newdelhi": "New Delhi", "new-delhi": "New Delhi"}.get(c, c.title())
 
 
-def age_minutes(seen):
-    """Minutes since a '25 Nov, 6:06 am' timestamp (IST); None if unknown."""
-    if not seen:
-        return None
-    now = datetime.now(IST)
-    try:
-        t = datetime.strptime(f"{seen} {now.year}", "%d %b, %I:%M %p %Y").replace(tzinfo=IST)
-    except ValueError:
-        return None
-    if t > now + timedelta(days=1):  # year rollover
-        t = t.replace(year=now.year - 1)
-    return (now - t).total_seconds() / 60
-
-
-def short_month(m):
-    return m[:3] + " " + m[-4:] if m != "?" else m
-
-
-def lines_for(data, key):
-    out = []
-    for city, v in data.items():
-        x = v.get(key)
-        age = age_minutes(x["seen"]) if x else None
-        if x and x["count"] > 0 and age is not None and age <= FRESH_MIN:
-            out.append(f"• {city}: from {short_month(x['earliest'])} · seen {x['seen'].split(', ')[-1]} ({int(age)} min ago)")
-    return out
+def line(r, now):
+    d = datetime.strptime(r["earliest"], "%Y-%m-%d").strftime("%-d %b %Y")
+    more = f" (+{r['count'] - 1} more date{'s' if r['count'] > 2 else ''})" if r["count"] > 1 else ""
+    ago = int((now - r["seen"]).total_seconds() // 60)
+    return f"• {nice_city(r['city'])}: {d}{more} · seen {r['seen'].strftime('%-I:%M %p')} ({ago} min ago)"
 
 
 def main():
+    now = datetime.now(IST)
     try:
-        data = parse(fetch_text())
-    except Exception as e:  # page down: stay quiet, try next run
+        records = parse(fetch())
+    except Exception as e:  # source down: stay quiet, try next run
         print("fetch failed:", e)
         return
-    print(data)
-    if not data:
-        print("could not parse page")
+    if not records:
+        print("no records found on page (layout may have changed)")
         return
 
-    hits_b = lines_for(data, "B")
-    hits_a = lines_for(data, "A")
-    if not hits_b and not hits_a:
-        print(f"no openings seen in the last {FRESH_MIN} min")
+    mine = [r for r in records if r["cls"] == MATCH]
+    print(f"{len(records)} records, {len(mine)} matching")
+    for r in mine:
+        print(" ", r["city"], r["kind"], r["earliest"], r["seen"].strftime("%d %b %H:%M"))
+
+    fresh = [r for r in mine if now - r["seen"] <= timedelta(minutes=FRESH_MIN)]
+    old_ids = set(open(STATE_FILE).read().split()) if os.path.exists(STATE_FILE) else set()
+    new = [r for r in fresh if r["id"] not in old_ids]
+    with open(STATE_FILE, "w") as f:  # remember ids still on the feed
+        f.write("\n".join(sorted({r["id"] for r in fresh} | (old_ids & {r["id"] for r in mine}))))
+    if not new:
+        print(f"nothing new in the last {FRESH_MIN} min")
         return
 
-    # Alert only when something was seen that we haven't alerted on before
-    # (a new "last seen" time), not every time a 3-hour count changes.
-    sightings = sorted(f"{c}|{k}|{x['seen']}" for c, v in data.items()
-                       for k, x in v.items() if x["count"] > 0
-                       and (age_minutes(x["seen"]) or 1e9) <= FRESH_MIN)
-    old = set(open(STATE_FILE).read().split("\n")) if os.path.exists(STATE_FILE) else set()
-    fresh = [s for s in sightings if s not in old]
-    with open(STATE_FILE, "w") as f:
-        f.write("\n".join(sightings))
-    if not fresh:
-        print("nothing new since last alert, skipping")
-        return
-    new_b = any(s.split("|")[1] == "B" for s in fresh)
-
-    ist = datetime.now(IST).strftime("%-I:%M %p")
+    a = sorted([r for r in new if r["kind"] == PRIMARY], key=lambda r: r["earliest"])
+    b = sorted([r for r in new if r["kind"] != PRIMARY], key=lambda r: r["earliest"])
     body = ""
-    if hits_b:
-        body += f"{B_NAME.upper()}\n" + "\n".join(hits_b) + "\n\n"
-    if hits_a:
-        body += f"{A_NAME}\n" + "\n".join(hits_a) + "\n\n"
-    body += f"Checked {ist} IST · may already be taken — open now"
+    if b:
+        body += f"{B_NAME.upper()}\n" + "\n".join(line(r, now) for r in b) + "\n\n"
+    if a:
+        body += f"{A_NAME}\n" + "\n".join(line(r, now) for r in a) + "\n\n"
+    body += f"Checked {now.strftime('%-I:%M %p')} IST · may already be taken, open now"
 
-    if new_b:
-        cities = ", ".join(s.split("|")[0] for s in fresh if s.split("|")[1] == "B")
-        notify(f"{B_NAME} slots seen: {cities}", body, "urgent", "green_circle,rotating_light")
+    if b:
+        cities = ", ".join(dict.fromkeys(nice_city(r["city"]) for r in b))
+        notify(f"{B_NAME} slot: {cities}", body, "urgent", "green_circle,rotating_light")
     else:
-        cities = ", ".join(sorted({s.split("|")[0] for s in fresh}))
-        notify(f"New {A_NAME} slots: {cities}", body, "default", "large_blue_circle")
+        cities = ", ".join(dict.fromkeys(nice_city(r["city"]) for r in a))
+        notify(f"{A_NAME} slot: {cities}", body, "default", "large_blue_circle")
     print("alert sent:\n" + body)
 
 
