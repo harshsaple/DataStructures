@@ -12,5 +12,6 @@ Runs from `.github/workflows/page-watch.yml` every ~5 minutes. Everything specif
 | `SECTIONS` | comma-separated section names to look for |
 | `LABELS` | two comma-separated labels (type A, type B) as written on the page |
 | `NAMES` | two comma-separated names to show in alerts |
+| `ANCHOR` | optional text marking where the relevant part of the page starts |
 
 Type B results are sent as urgent; type A only as normal priority.

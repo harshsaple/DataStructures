@@ -31,6 +31,9 @@ def fetch_text():
 
 def parse(text):
     """Return {section: {"A": (count, earliest), "B": (count, earliest)}}."""
+    anchor = os.environ.get("ANCHOR", "")
+    if anchor and anchor in text:
+        text = text[text.index(anchor):]
     results = {}
     for i, city in enumerate(CITIES):
         start = text.find(f"### {city}")
@@ -43,7 +46,7 @@ def parse(text):
         block = text[start: min(nxt) if nxt else start + 1500]
         info = {}
         for label, key in ((A_LABEL, "A"), (B_LABEL, "B")):
-            m = re.search(label + r".{0,80}?(\d+)\s+openings?.{0,80}?Earliest from ([A-Z][a-z]+ \d{4})", block)
+            m = re.search(re.escape(label) + r".{0,80}?(\d+)\s+openings?.{0,80}?Earliest from ([A-Z][a-z]+ \d{4})", block, re.I)
             if m:
                 info[key] = (int(m.group(1)), m.group(2))
         results[city] = info
