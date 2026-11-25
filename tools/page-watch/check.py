@@ -71,6 +71,24 @@ def notify(title, body, priority, tags):
     urllib.request.urlopen(req, timeout=30)
 
 
+IST = timezone(timedelta(hours=5, minutes=30))
+FRESH_MIN = int(os.environ.get("FRESH_MINUTES", "15"))
+
+
+def age_minutes(seen):
+    """Minutes since a '25 Nov, 6:06 am' timestamp (IST); None if unknown."""
+    if not seen:
+        return None
+    now = datetime.now(IST)
+    try:
+        t = datetime.strptime(f"{seen} {now.year}", "%d %b, %I:%M %p %Y").replace(tzinfo=IST)
+    except ValueError:
+        return None
+    if t > now + timedelta(days=1):  # year rollover
+        t = t.replace(year=now.year - 1)
+    return (now - t).total_seconds() / 60
+
+
 def short_month(m):
     return m[:3] + " " + m[-4:] if m != "?" else m
 
@@ -79,9 +97,9 @@ def lines_for(data, key):
     out = []
     for city, v in data.items():
         x = v.get(key)
-        if x and x["count"] > 0:
-            seen = f" · last seen {x['seen'].split(', ')[-1]}" if x["seen"] else ""
-            out.append(f"• {city}: from {short_month(x['earliest'])} · {x['count']} in last 3h{seen}")
+        age = age_minutes(x["seen"]) if x else None
+        if x and x["count"] > 0 and age is not None and age <= FRESH_MIN:
+            out.append(f"• {city}: from {short_month(x['earliest'])} · seen {x['seen'].split(', ')[-1]} ({int(age)} min ago)")
     return out
 
 
@@ -99,13 +117,14 @@ def main():
     hits_b = lines_for(data, "B")
     hits_a = lines_for(data, "A")
     if not hits_b and not hits_a:
-        print("no openings")
+        print(f"no openings seen in the last {FRESH_MIN} min")
         return
 
     # Alert only when something was seen that we haven't alerted on before
     # (a new "last seen" time), not every time a 3-hour count changes.
     sightings = sorted(f"{c}|{k}|{x['seen']}" for c, v in data.items()
-                       for k, x in v.items() if x["count"] > 0)
+                       for k, x in v.items() if x["count"] > 0
+                       and (age_minutes(x["seen"]) or 1e9) <= FRESH_MIN)
     old = set(open(STATE_FILE).read().split("\n")) if os.path.exists(STATE_FILE) else set()
     fresh = [s for s in sightings if s not in old]
     with open(STATE_FILE, "w") as f:
@@ -115,13 +134,13 @@ def main():
         return
     new_b = any(s.split("|")[1] == "B" for s in fresh)
 
-    ist = datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%-I:%M %p")
+    ist = datetime.now(IST).strftime("%-I:%M %p")
     body = ""
     if hits_b:
         body += f"{B_NAME.upper()}\n" + "\n".join(hits_b) + "\n\n"
     if hits_a:
         body += f"{A_NAME}\n" + "\n".join(hits_a) + "\n\n"
-    body += f"Checked {ist} IST · times are IST · tap to open"
+    body += f"Checked {ist} IST · may already be taken — open now"
 
     if new_b:
         cities = ", ".join(s.split("|")[0] for s in fresh if s.split("|")[1] == "B")
