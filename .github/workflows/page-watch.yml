@@ -2,7 +2,7 @@ name: page-watch
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # every 5 min (GitHub may delay runs a few minutes)
+    - cron: "3-58/5 * * * *"  # every 5 min, offset from the busy top of the hour
   workflow_dispatch:         # manual run from the Actions tab
 
 concurrency:
