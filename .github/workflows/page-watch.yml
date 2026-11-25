@@ -28,6 +28,7 @@ jobs:
           restore-keys: page-watch-
       - name: Run check
         env:
+          CONFIG: ${{ secrets.CONFIG }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           TARGET_URL: ${{ secrets.TARGET_URL }}
           CLICK_URL: ${{ secrets.CLICK_URL }}

@@ -5,6 +5,13 @@ import os
 import re
 import sys
 import urllib.request
+import json
+
+# All settings can come from one CONFIG secret (JSON) or from separate variables.
+_cfg = json.loads(os.environ.get("CONFIG") or "{}")
+for _k, _v in _cfg.items():
+    if not os.environ.get(_k):
+        os.environ[_k] = _v
 
 URL = os.environ["TARGET_URL"]
 CITIES = os.environ["SECTIONS"].split(",")
