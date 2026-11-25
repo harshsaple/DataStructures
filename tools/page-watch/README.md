@@ -1,6 +1,6 @@
 # page-watch
 
-Small scheduled job that reads a page, counts items per section, and sends a push notification through [ntfy](https://ntfy.sh) when something new shows up. Identical results are not re-sent.
+Small scheduled job that reads a page, counts items per section, and sends a push notification through [ntfy](https://ntfy.sh) when something new shows up. It alerts only when something new is seen since the last alert.
 
 Runs from `.github/workflows/page-watch.yml` every ~5 minutes. Everything specific is configured through repository secrets — either one `CONFIG` secret holding a JSON object with the keys below, or the keys as separate secrets:
 
