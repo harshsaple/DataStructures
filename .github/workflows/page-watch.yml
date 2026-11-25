@@ -1,0 +1,43 @@
+name: page-watch
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # every 5 min (GitHub may delay runs a few minutes)
+  workflow_dispatch:         # manual run from the Actions tab
+
+concurrency:
+  group: page-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    defaults:
+      run:
+        working-directory: tools/page-watch
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools/page-watch
+      - name: Restore state
+        uses: actions/cache/restore@v4
+        with:
+          path: tools/page-watch/last_alert.txt
+          key: page-watch-${{ github.run_id }}
+          restore-keys: page-watch-
+      - name: Run check
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TARGET_URL: ${{ secrets.TARGET_URL }}
+          CLICK_URL: ${{ secrets.CLICK_URL }}
+          SECTIONS: ${{ secrets.SECTIONS }}
+          LABELS: ${{ secrets.LABELS }}
+          NAMES: ${{ secrets.NAMES }}
+        run: python3 check.py
+      - name: Save state
+        if: always() && hashFiles('tools/page-watch/last_alert.txt') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: tools/page-watch/last_alert.txt
+          key: page-watch-${{ github.run_id }}
