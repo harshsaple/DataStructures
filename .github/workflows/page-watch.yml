@@ -23,7 +23,9 @@ jobs:
       - name: Restore state
         uses: actions/cache/restore@v4
         with:
-          path: tools/page-watch/last_alert.txt
+          path: |
+            tools/page-watch/last_alert.txt
+            tools/page-watch/health.txt
           key: page-watch-${{ github.run_id }}
           restore-keys: page-watch-
       - name: Run check
@@ -37,8 +39,10 @@ jobs:
           NAMES: ${{ secrets.NAMES }}
         run: python3 check.py
       - name: Save state
-        if: always() && hashFiles('tools/page-watch/last_alert.txt') != ''
+        if: always() && (hashFiles('tools/page-watch/last_alert.txt') != '' || hashFiles('tools/page-watch/health.txt') != '')
         uses: actions/cache/save@v4
         with:
-          path: tools/page-watch/last_alert.txt
+          path: |
+            tools/page-watch/last_alert.txt
+            tools/page-watch/health.txt
           key: page-watch-${{ github.run_id }}

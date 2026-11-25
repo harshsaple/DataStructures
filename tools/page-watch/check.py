@@ -7,7 +7,7 @@ All specifics come from the CONFIG secret (JSON) or separate env variables:
   NAMES          display names: "<name for primary kind>,<name for other kinds>"
   PRIMARY_KIND   record kind shown with the first name (default "ofc")
   CLICK_URL      link opened when the notification is tapped
-  FRESH_MINUTES  only alert on records seen within this many minutes (default 15)
+  FRESH_MINUTES  ignore records older than this when first noticed (default 120)
 """
 import json
 import os
@@ -26,7 +26,8 @@ TOPIC = os.environ["NTFY_TOPIC"]
 MATCH = os.environ["MATCH"].lower()
 A_NAME, B_NAME = os.environ.get("NAMES", "A,B").split(",")
 PRIMARY = os.environ.get("PRIMARY_KIND", "ofc")
-FRESH_MIN = int(os.environ.get("FRESH_MINUTES", "15"))
+FRESH_MIN = int(os.environ.get("FRESH_MINUTES", "120"))
+HEALTH_FILE = "health.txt"
 STATE_FILE = "last_alert.txt"
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -72,15 +73,33 @@ def line(r, now):
     return f"• {nice_city(r['city'])}: {d}{more} · seen {r['seen'].strftime('%-I:%M %p')} ({ago} min ago)"
 
 
+def health(problem, now):
+    """Return True if OK. Alert once when the source breaks, once when it recovers."""
+    was = open(HEALTH_FILE).read().strip() if os.path.exists(HEALTH_FILE) else "ok"
+    if problem:
+        print(problem)
+        fails = int(was) + 1 if was.isdigit() else 1
+        with open(HEALTH_FILE, "w") as f:
+            f.write(str(fails))
+        if fails == 3:  # ~15 min of failures in a row
+            notify("Watcher not working", f"{problem}\nNo alerts until this is fixed. "
+                   f"Since {now.strftime('%-I:%M %p')} IST.", "high", "warning")
+        return False
+    if was.isdigit() and int(was) >= 3:
+        notify("Watcher working again", "Back to normal.", "low", "white_check_mark")
+    with open(HEALTH_FILE, "w") as f:
+        f.write("ok")
+    return True
+
+
 def main():
     now = datetime.now(IST)
     try:
         records = parse(fetch())
-    except Exception as e:  # source down: stay quiet, try next run
-        print("fetch failed:", e)
-        return
-    if not records:
-        print("no records found on page (layout may have changed)")
+        problem = "" if records else "no records found (page layout may have changed)"
+    except Exception as e:
+        records, problem = [], f"fetch failed: {e}"
+    if not health(problem, now):
         return
 
     mine = [r for r in records if r["cls"] == MATCH]
