@@ -8,6 +8,7 @@ All specifics come from the CONFIG secret (JSON):
   NAMES          display names: "<first kind>,<second kind>"
   CLICK_URL      link opened when the notification is tapped
   FRESH_MINUTES  ignore sightings older than this when first noticed (default 120)
+  KINDS          kinds to alert on: "a", "b" or "a,b" (default both; env KINDS overrides)
 """
 import html as htmllib
 import json
@@ -24,6 +25,8 @@ MATCH = CFG.get("MATCH", "").lower()
 SECTION = CFG.get("SECTION", "")
 A_NAME, B_NAME = CFG.get("NAMES", "A,B").split(",")
 FRESH_MIN = int(CFG.get("FRESH_MINUTES", 120))
+# which kinds to alert on: "a", "b" or "a,b" (CONFIG or KINDS env; default both)
+KINDS = set((os.environ.get("KINDS") or CFG.get("KINDS") or "a,b").split(","))
 STATE_FILE = "last_alert.txt"
 HEALTH_FILE = "health.json"
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -175,7 +178,8 @@ def main():
         print("  ", r["src"], r["city"], r["kind"], r["earliest"],
               r["seen"].astimezone(IST).strftime("%d %b %H:%M IST"))
 
-    fresh = [r for r in sightings if now - r["seen"] <= timedelta(minutes=FRESH_MIN)]
+    fresh = [r for r in sightings if r["kind"] in KINDS
+             and now - r["seen"] <= timedelta(minutes=FRESH_MIN)]
     old_ids = load_ids()
     new = [r for r in fresh if r["id"] not in old_ids]
     keep = {r["id"] for r in fresh} | (old_ids & {r["id"] for r in sightings})
